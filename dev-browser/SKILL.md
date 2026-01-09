@@ -119,9 +119,70 @@ await client.disconnect(); // Disconnect (pages persist)
 // ARIA Snapshot methods
 const snapshot = await client.getAISnapshot("name"); // Get accessibility tree
 const element = await client.selectSnapshotRef("name", "e5"); // Get element by ref
+
+// Token-efficient content extraction (NEW)
+const outline = await client.getOutline("name"); // Tree of all elements
+const interactive = await client.getInteractiveOutline("name"); // Only interactive elements
+const text = await client.getVisibleText("name"); // Visible text only
 ```
 
 The `page` object is a standard Playwright Page.
+
+### Token-Efficient Content Extraction
+
+These methods provide structured, concise output that uses far fewer tokens than screenshots or full ARIA snapshots:
+
+**`getOutline(name, options?)`** - Returns a tree structure of DOM elements:
+```typescript
+const outline = await client.getOutline("mypage", { maxDepth: 4 });
+// Output:
+// body
+//   header#main-header
+//     nav [role=navigation]
+//       a "Home" [href=/]
+//       a "Products" [href=/products]
+//   main
+//     div.product-list ... (24)
+```
+- Shows tag names, IDs, classes, and relevant attributes
+- Collapses repeated siblings (shows `(×5)` instead of repeating)
+- Limits depth to reduce noise (default: 6)
+- Options: `{ selector?: string, maxDepth?: number }`
+
+**`getInteractiveOutline(name, selector?)`** - Returns only interactive elements and landmarks:
+```typescript
+const interactive = await client.getInteractiveOutline("mypage");
+// Output:
+// header
+//   a "Home" [href=/]
+//   a "Products" [href=/products]
+// main
+//   button "Add to Cart"
+//   input [type=text] [placeholder="Search"]
+// footer
+//   a "Contact" [href=/contact]
+```
+- Best for understanding available actions
+- Automatically prunes non-interactive containers
+- Shows landmarks (header, nav, main, footer, form, etc.)
+
+**`getVisibleText(name, options?)`** - Returns only visible text, filtering hidden elements:
+```typescript
+const text = await client.getVisibleText("mypage", { limit: 5000 });
+```
+- Excludes `display: none`, `visibility: hidden`, `opacity: 0`
+- Respects parent visibility (hidden parent = hidden children)
+- Preserves block structure with newlines
+- Options: `{ selector?: string, limit?: number }`
+
+**When to use which:**
+| Method | Use case | Token efficiency |
+|--------|----------|------------------|
+| `getInteractiveOutline()` | Discover clickable elements | ⭐⭐⭐ Most efficient |
+| `getOutline()` | Understand page structure | ⭐⭐ Very efficient |
+| `getVisibleText()` | Extract readable content | ⭐⭐ Very efficient |
+| `getAISnapshot()` | Need ref-based clicking | ⭐ Full ARIA tree |
+| `screenshot()` | Visual debugging | Uses vision tokens |
 
 ## Waiting
 

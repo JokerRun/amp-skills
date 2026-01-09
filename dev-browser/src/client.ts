@@ -213,6 +213,26 @@ export interface ServerInfo {
   extensionConnected?: boolean;
 }
 
+/**
+ * Options for getOutline
+ */
+export interface OutlineOptions {
+  /** CSS selector for the root element (default: "body") */
+  selector?: string;
+  /** Maximum depth to traverse (default: 6) */
+  maxDepth?: number;
+}
+
+/**
+ * Options for getVisibleText
+ */
+export interface VisibleTextOptions {
+  /** CSS selector for the root element (default: "body") */
+  selector?: string;
+  /** Maximum characters to return (default: 10000) */
+  limit?: number;
+}
+
 export interface DevBrowserClient {
   page: (name: string) => Promise<Page>;
   list: () => Promise<string[]>;
@@ -233,6 +253,22 @@ export interface DevBrowserClient {
    * Get server information including mode and extension connection status.
    */
   getServerInfo: () => Promise<ServerInfo>;
+  /**
+   * Get a token-efficient tree outline of page elements.
+   * Shows tag names, IDs, classes, and relevant attributes.
+   * Collapses repeated siblings and limits depth for efficiency.
+   */
+  getOutline: (name: string, options?: OutlineOptions) => Promise<string>;
+  /**
+   * Get a token-efficient outline showing only interactive elements and landmarks.
+   * Best for understanding page structure and available actions.
+   */
+  getInteractiveOutline: (name: string, selector?: string) => Promise<string>;
+  /**
+   * Get visible text from page, filtering out hidden elements.
+   * Uses computed styles to exclude display:none, visibility:hidden, opacity:0.
+   */
+  getVisibleText: (name: string, options?: VisibleTextOptions) => Promise<string>;
 }
 
 export async function connect(serverUrl = "http://localhost:9222"): Promise<DevBrowserClient> {
@@ -460,6 +496,388 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
         mode: (info.mode as "launch" | "extension") ?? "launch",
         extensionConnected: info.extensionConnected,
       };
+    },
+
+    async getOutline(name: string, options: OutlineOptions = {}): Promise<string> {
+      const page = await getPage(name);
+      const selector = options.selector ?? "body";
+      const maxDepth = options.maxDepth ?? 6;
+
+      const result = await page.evaluate(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ({ selector, maxDepth }: { selector: string; maxDepth: number }) => {
+          // Browser context - use globalThis for DOM access
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const g = globalThis as any;
+          const doc = g.document;
+
+          const SKIP_TAGS = new Set([
+            "SCRIPT",
+            "STYLE",
+            "NOSCRIPT",
+            "SVG",
+            "PATH",
+            "BR",
+            "HR",
+            "META",
+            "LINK",
+          ]);
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function truncate(text: string, maxLen: number) {
+            text = text.trim().replace(/\s+/g, " ");
+            return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
+          }
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function getAttributes(el: any, getText: any) {
+            const attrs: string[] = [];
+            const tag = el.tagName;
+            const text = getText(el);
+            if (text) attrs.push('"' + text + '"');
+            if (tag === "A") {
+              const href = el.getAttribute("href");
+              if (href) attrs.push("[href=" + href.slice(0, 50) + "]");
+            }
+            if (tag === "IMG") {
+              const alt = el.getAttribute("alt");
+              attrs.push(alt ? '[alt="' + alt.slice(0, 30) + '"]' : "[img]");
+            }
+            if (tag === "INPUT") {
+              attrs.push("[type=" + (el.getAttribute("type") || "text") + "]");
+              const placeholder = el.getAttribute("placeholder");
+              if (placeholder) attrs.push('[placeholder="' + placeholder + '"]');
+            }
+            if (tag === "TEXTAREA") {
+              const placeholder = el.getAttribute("placeholder");
+              if (placeholder) attrs.push('[placeholder="' + placeholder + '"]');
+            }
+            if (tag === "SELECT") attrs.push("(" + el.options.length + " options)");
+            const role = el.getAttribute("role");
+            if (role) attrs.push("[role=" + role + "]");
+            const ariaLabel = el.getAttribute("aria-label");
+            if (ariaLabel) attrs.push('[aria-label="' + ariaLabel.slice(0, 30) + '"]');
+            const elName = el.getAttribute("name");
+            if (elName) attrs.push("[name=" + elName + "]");
+            return attrs.join(" ");
+          }
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function formatLine(el: any, getId: any, getText: any, indent: string) {
+            const attrs = getAttributes(el, getText);
+            return indent + getId(el) + (attrs ? " " + attrs : "");
+          }
+
+          const root = doc.querySelector(selector);
+          if (!root) throw new Error("Element not found: " + selector);
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function getId(el: any) {
+            let id = el.tagName.toLowerCase();
+            if (el.id) id += "#" + el.id;
+            else if (el.className && typeof el.className === "string") {
+              const cls = el.className.trim().split(/\s+/).slice(0, 2).join(".");
+              if (cls) id += "." + cls;
+            }
+            return id;
+          }
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function getText(el: any) {
+            let text = "";
+            for (const child of el.childNodes) {
+              if (child.nodeType === 3) text += child.textContent; // Node.TEXT_NODE = 3
+            }
+            return truncate(text, 50);
+          }
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function getSignature(el: any) {
+            return getId(el) + " " + getText(el);
+          }
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function findRepeatedGroups(children: any[]) {
+            const groups: Array<{ start: number; count: number }> = [];
+            let i = 0;
+            while (i < children.length) {
+              const sig = getSignature(children[i]);
+              let count = 1;
+              while (i + count < children.length && getSignature(children[i + count]) === sig)
+                count++;
+              groups.push({ start: i, count });
+              i += count;
+            }
+            return groups;
+          }
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function walk(el: any, depth: number): string {
+            if (SKIP_TAGS.has(el.tagName)) return "";
+            const indent = "  ".repeat(depth);
+            let line = formatLine(el, getId, getText, indent);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const children = Array.from(el.children).filter((c: any) => !SKIP_TAGS.has(c.tagName));
+            if (depth >= maxDepth && children.length > 0) line += " ... (" + children.length + ")";
+            line += "\n";
+            if (depth >= maxDepth || children.length === 0) return line;
+
+            for (const { start, count } of findRepeatedGroups(children)) {
+              if (count > 2) {
+                const childOutput = walk(children[start], depth + 1);
+                const firstLine = childOutput.split("\n")[0];
+                line += firstLine + " (×" + count + ")\n";
+                const rest = childOutput.split("\n").slice(1).join("\n");
+                if (rest.trim()) line += rest;
+              } else {
+                for (let j = 0; j < count; j++) line += walk(children[start + j], depth + 1);
+              }
+            }
+            return line;
+          }
+
+          return walk(root, 0);
+        },
+        { selector, maxDepth }
+      );
+
+      return result.trimEnd();
+    },
+
+    async getInteractiveOutline(name: string, selector = "body"): Promise<string> {
+      const page = await getPage(name);
+
+      const result = await page.evaluate((selector: string) => {
+        // Browser context - use globalThis for DOM access
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const g = globalThis as any;
+        const doc = g.document;
+
+        const SKIP_TAGS = new Set([
+          "SCRIPT",
+          "STYLE",
+          "NOSCRIPT",
+          "SVG",
+          "PATH",
+          "BR",
+          "HR",
+          "META",
+          "LINK",
+        ]);
+        const INTERACTIVE = new Set(["A", "BUTTON", "INPUT", "SELECT", "TEXTAREA"]);
+        const LANDMARKS = new Set([
+          "HEADER",
+          "NAV",
+          "MAIN",
+          "FOOTER",
+          "ASIDE",
+          "SECTION",
+          "FORM",
+          "DIALOG",
+        ]);
+        const LANDMARK_ROLES = new Set([
+          "banner",
+          "navigation",
+          "main",
+          "contentinfo",
+          "complementary",
+          "region",
+          "form",
+          "search",
+          "dialog",
+        ]);
+
+        function truncate(text: string, maxLen: number) {
+          text = text.trim().replace(/\s+/g, " ");
+          return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function getAttributes(el: any, getText: any) {
+          const attrs: string[] = [];
+          const tag = el.tagName;
+          const text = getText(el);
+          if (text) attrs.push('"' + text + '"');
+          if (tag === "A") {
+            const href = el.getAttribute("href");
+            if (href) attrs.push("[href=" + href.slice(0, 50) + "]");
+          }
+          if (tag === "IMG") {
+            const alt = el.getAttribute("alt");
+            attrs.push(alt ? '[alt="' + alt.slice(0, 30) + '"]' : "[img]");
+          }
+          if (tag === "INPUT") {
+            attrs.push("[type=" + (el.getAttribute("type") || "text") + "]");
+            const placeholder = el.getAttribute("placeholder");
+            if (placeholder) attrs.push('[placeholder="' + placeholder + '"]');
+          }
+          if (tag === "TEXTAREA") {
+            const placeholder = el.getAttribute("placeholder");
+            if (placeholder) attrs.push('[placeholder="' + placeholder + '"]');
+          }
+          if (tag === "SELECT") attrs.push("(" + el.options.length + " options)");
+          const role = el.getAttribute("role");
+          if (role) attrs.push("[role=" + role + "]");
+          const ariaLabel = el.getAttribute("aria-label");
+          if (ariaLabel) attrs.push('[aria-label="' + ariaLabel.slice(0, 30) + '"]');
+          const elName = el.getAttribute("name");
+          if (elName) attrs.push("[name=" + elName + "]");
+          return attrs.join(" ");
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function formatLine(el: any, getId: any, getText: any, indent: string) {
+          const attrs = getAttributes(el, getText);
+          return indent + getId(el) + (attrs ? " " + attrs : "");
+        }
+
+        const root = doc.querySelector(selector);
+        if (!root) throw new Error("Element not found: " + selector);
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function isInteractive(el: any) {
+          return (
+            INTERACTIVE.has(el.tagName) ||
+            el.getAttribute("role") === "button" ||
+            el.hasAttribute("onclick") ||
+            el.getAttribute("tabindex") === "0"
+          );
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function isLandmark(el: any) {
+          return LANDMARKS.has(el.tagName) || LANDMARK_ROLES.has(el.getAttribute("role") || "");
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function getId(el: any) {
+          let id = el.tagName.toLowerCase();
+          if (el.id) id += "#" + el.id;
+          return id;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function getText(el: any) {
+          return truncate(el.innerText || "", 50);
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function buildTree(el: any): any {
+          if (SKIP_TAGS.has(el.tagName)) return null;
+          if (isInteractive(el)) return { el, children: [] };
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const childTrees: any[] = [];
+          for (const child of el.children) {
+            const tree = buildTree(child);
+            if (tree) childTrees.push(tree);
+          }
+
+          if (isLandmark(el) && childTrees.length > 0) return { el, children: childTrees };
+          if (childTrees.length === 1) return childTrees[0];
+          if (childTrees.length > 1) return { el: null, children: childTrees };
+          return null;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function render(node: any, depth = 0): string {
+          if (!node) return "";
+          const indent = "  ".repeat(depth);
+          if (node.el) {
+            let output = formatLine(node.el, getId, getText, indent) + "\n";
+            for (const child of node.children) output += render(child, depth + 1);
+            return output;
+          }
+          let output = "";
+          for (const child of node.children) output += render(child, depth);
+          return output;
+        }
+
+        const tree = buildTree(root);
+        return tree ? render(tree) : "";
+      }, selector);
+
+      return result.trimEnd();
+    },
+
+    async getVisibleText(name: string, options: VisibleTextOptions = {}): Promise<string> {
+      const page = await getPage(name);
+      const selector = options.selector ?? "body";
+      const limit = options.limit ?? 10000;
+
+      const result = await page.evaluate(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ({ selector, limit }: { selector: string; limit: number }) => {
+          // Browser context - use globalThis for DOM access
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const g = globalThis as any;
+          const doc = g.document;
+
+          const root = doc.querySelector(selector);
+          if (!root) throw new Error("Element not found: " + selector);
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const cache = new Map<any, boolean>();
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function isVisible(el: any): boolean {
+            if (!el || el === doc.documentElement) return true;
+            if (cache.has(el)) return cache.get(el)!;
+            const style = g.getComputedStyle(el);
+            const visible =
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              style.visibility !== "collapse" &&
+              parseFloat(style.opacity) !== 0 &&
+              isVisible(el.parentElement);
+            cache.set(el, visible);
+            return visible;
+          }
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          function isBlock(el: any): boolean {
+            const display = g.getComputedStyle(el).display;
+            return (
+              display === "block" ||
+              display === "flex" ||
+              display === "grid" ||
+              display === "list-item" ||
+              display === "table" ||
+              display === "table-row"
+            );
+          }
+
+          let result = "";
+          const walker = doc.createTreeWalker(
+            root,
+            0x5 // NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT = 4 + 1 = 5
+          );
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            if (node.nodeType === 1) {
+              // Node.ELEMENT_NODE = 1
+              if (isBlock(node) && result.length > 0 && !result.endsWith("\n")) {
+                result += "\n";
+              }
+            } else if (isVisible(node.parentElement)) {
+              const t = (node.textContent || "").trim();
+              if (t) result += t + " ";
+            }
+            // Early exit if we've exceeded the limit
+            if (result.length > limit) break;
+          }
+
+          // Trim and truncate
+          result = result.trim();
+          if (result.length > limit) {
+            result = result.slice(0, limit) + "...";
+          }
+          return result;
+        },
+        { selector, limit }
+      );
+
+      return result;
     },
   };
 }
