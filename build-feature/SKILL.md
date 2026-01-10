@@ -9,6 +9,28 @@ Autonomous task execution loop that implements tasks one by one until complete.
 
 ---
 
+## Task Sizing
+
+**Each task must be completable in ONE iteration (~one context window).**
+
+Each iteration spawns a fresh Amp instance with no memory of previous work. If a task is too big, the LLM runs out of context before finishing.
+
+### Right-sized tasks:
+- Add a database column + migration
+- Create a single UI component
+- Implement one server action
+- Add a filter to an existing list
+- Write tests for one module
+
+### Too big (split these):
+- "Build the entire dashboard" → Split into: schema, queries, components, filters
+- "Add authentication" → Split into: schema, middleware, login UI, session handling
+- "Refactor the API" → Split into one task per endpoint
+
+**Rule of thumb:** If you can't describe the change in 2-3 sentences, it's too big.
+
+---
+
 ## Workflow
 
 ### 0. Get the parent task ID
@@ -42,8 +64,10 @@ The task hierarchy may have multiple levels (parent → container → leaf tasks
 
 **Step 1: Get all tasks for the repo**
 ```
-task_list action: "list", repoURL: "<repo-url>", ready: true, status: "open"
+task_list action: "list", repoURL: "<repo-url>", ready: true, status: "open", limit: 10
 ```
+
+**Important:** Always use `limit` (5-10) to avoid context overflow with many tasks.
 
 **Step 2: Build the descendant set**
 Starting from the parent task ID, collect all tasks that are descendants:
@@ -65,7 +89,13 @@ Check if all descendant tasks are completed:
 - Query `task_list list` with `repoURL: "<repo-url>"` (no ready filter)
 - Build the full descendant set (same recursive approach as step 1)
 - If all leaf tasks in the descendant set are `completed`:
-  1. Archive progress.txt: `mv scripts/build-feature-loop/progress.txt scripts/build-feature-loop/archive/[feature-name]-[date].txt`
+  1. Archive progress.txt:
+     ```bash
+     DATE=$(date +%Y-%m-%d)
+     FEATURE="feature-name-here"
+     mkdir -p scripts/build-feature-loop/archive/$DATE-$FEATURE
+     mv scripts/build-feature-loop/progress.txt scripts/build-feature-loop/archive/$DATE-$FEATURE/
+     ```
   2. Create fresh progress.txt with empty template
   3. Clear parent-task-id.txt: `echo "" > scripts/build-feature-loop/parent-task-id.txt`
   4. Commit: `git add scripts/build-feature-loop && git commit -m "chore: archive progress for [feature-name]"`
@@ -174,6 +204,59 @@ Use `task_list action: "create"` immediately. Set appropriate `dependsOn` relati
 
 ---
 
+## Task Description Format
+
+Write descriptions that a future iteration can pick up without context:
+
+```
+[One-line summary of what to do]
+
+**What to do:**
+- Specific action 1
+- Specific action 2
+- Specific action 3
+
+**Files:**
+- path/to/file1.ts
+- path/to/file2.ts
+
+**Acceptance criteria:**
+- Specific verifiable outcome
+- npm run typecheck passes
+- npm test passes (if applicable)
+
+**Notes:**
+- Follow pattern from existing-file.ts
+- Any gotchas or context
+```
+
+### Dependency ordering (typical):
+1. Schema/database changes (migrations)
+2. Server actions / backend logic
+3. UI components that use the backend
+4. Integration / E2E tests
+
+---
+
+## Browser Verification
+
+For UI tasks, specify the right verification method:
+
+**Functional testing** (checking behavior, not appearance):
+```
+Use Chrome DevTools MCP with take_snapshot to read page content
+```
+- `take_snapshot` returns the a11y tree as text that can be read and verified
+- Use for: button exists, text appears, form works
+
+**Visual testing** (checking appearance):
+```
+Use take_screenshot to capture and verify visual appearance
+```
+- Use for: layout, colors, styling, animations
+
+---
+
 ## Quality Requirements
 
 Before marking any task complete:
@@ -195,7 +278,22 @@ When no ready tasks remain AND all tasks are completed:
 ## Important Notes
 
 - Always use `ready: true` when listing tasks to only get tasks with satisfied dependencies
+- Always use `limit: 5-10` when listing tasks to avoid context overflow
 - Each handoff runs in a fresh thread with clean context
 - Progress.txt is the memory between iterations - keep it updated
 - Prefer tasks in the same area as just-completed work for better context continuity
 - The handoff goal MUST include instructions to update progress.txt, commit, and re-invoke this skill
+
+---
+
+## Pre-Flight Checklist
+
+Before starting the loop, verify:
+
+- [ ] Parent task ID exists in `scripts/build-feature-loop/parent-task-id.txt`
+- [ ] Subtasks exist with proper `parentID` set
+- [ ] At least one task has no dependencies (can start)
+- [ ] Each task is small enough for one iteration
+- [ ] Each task has "npm run typecheck passes" in acceptance criteria
+- [ ] UI tasks specify snapshot vs screenshot verification
+- [ ] Task descriptions have enough detail to implement without context
