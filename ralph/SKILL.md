@@ -177,17 +177,7 @@ Show the user what was created:
 3. [Task 3 title] - depends on #2
 ...
 
-**To run Ralph:**
-```bash
-./scripts/ralph/ralph.sh [max_iterations]
-# or directly:
-npx tsx scripts/ralph/ralph.ts [max_iterations]
-```
-
-**To check status:**
-```bash
-amp task list --parentID [parent-id] --limit 10
-```
+**To start Ralph:** Say "run ralph" or "start the loop" - I'll use handoff to execute the first ready task, and each task will hand off to the next until complete.
 
 ---
 
@@ -261,12 +251,7 @@ These tasks don't have dependencies set. Should I:
 **Next task Ralph will pick:**
 [Task title] - [brief description]
 
-**To run Ralph:**
-```bash
-./scripts/ralph/ralph.sh [max_iterations]
-# or directly:
-npx tsx scripts/ralph/ralph.ts [max_iterations]
-```
+**To start Ralph:** Say "run ralph" or "start the loop"
 
 ---
 
@@ -425,7 +410,7 @@ Does this look right? Any tasks to add or remove?
 
 **Subtasks:** 14 tasks created with dependencies
 
-**To run:** `./scripts/ralph/ralph.sh 20`
+**To start:** Say "run ralph" or "start the loop"
 
 ---
 
@@ -433,8 +418,8 @@ Does this look right? Any tasks to add or remove?
 
 When all subtasks are completed:
 1. Ralph marks the **parent task** as `completed`
-2. Ralph outputs `<promise>COMPLETE</promise>`
-3. The ralph.sh/ralph.ts loop detects this and exits
+2. Reports "✅ Build complete - all tasks finished!"
+3. Summarizes what was accomplished
 
 **Important:** Ralph uses `limit: 5` when querying tasks to avoid context overflow. If you have many subtasks, they'll be processed over multiple iterations.
 
