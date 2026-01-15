@@ -187,7 +187,18 @@ If the user already has tasks created, help them set up Ralph to run them.
 
 ### Find the parent task:
 
-Ask the user:
+**First, check if a parent task is already saved:**
+
+```bash
+cat scripts/ralph/parent-task-id.txt
+```
+
+If this file exists and contains a task ID, use it! Verify it's valid by fetching the task:
+```
+task_list action: "get", taskID: "<id-from-file>"
+```
+
+**Only if no saved parent task exists**, ask the user:
 ```
 What's the parent task? You can give me:
 - The task ID directly
