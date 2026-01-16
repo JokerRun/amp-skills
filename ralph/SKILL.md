@@ -179,6 +179,8 @@ Show the user what was created:
 
 **To start Ralph:** Say "run ralph" or "start the loop" - I'll use handoff to execute the first ready task, and each task will hand off to the next until complete.
 
+```
+
 ---
 
 ## Mode 2: Setting Up Existing Tasks
