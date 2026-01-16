@@ -268,6 +268,9 @@ These tasks don't have dependencies set. Should I:
 
 ---
 
+```
+
+
 ## Final Setup (Required for Both Modes)
 
 **ALWAYS run these steps after creating tasks OR setting up existing tasks:**
