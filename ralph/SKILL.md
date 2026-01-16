@@ -266,10 +266,9 @@ These tasks don't have dependencies set. Should I:
 
 **To start Ralph:** Say "run ralph" or "start the loop"
 
----
-
 ```
 
+---
 
 ## Final Setup (Required for Both Modes)
 
